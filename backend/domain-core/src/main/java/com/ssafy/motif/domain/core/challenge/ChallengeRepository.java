@@ -177,22 +177,35 @@ public interface ChallengeRepository extends JpaRepository<Challenge, Integer> {
 
     /** 어드민도 삭제된 챌린지는 수정 대상으로 잡지 않는다 — §3.7 실패표 404 "대상 없음·삭제". */
     /**
-     * 숏폼 피드 첫 페이지 (API 명세 §7.1) — 최신순 커서.
+     * 숏폼 피드 첫 페이지 (API 명세 §7.1) — <b>참여 수 내림차순, 동수면 최신순</b>.
+     * §5.4 아티스트 그리드와 같은 규칙이다.
      *
      * <p><b>커서 유무로 메서드를 가른다.</b> {@code :cursor is null or …} 로 한 쿼리에
      * 합치면 타입 없는 {@code null} 을 Postgres 가 추론하다 운영에서 터진다 —
      * {@code NoticeRepository} 가 같은 이유로 갈라져 있다.
      *
-     * <p>정렬 키가 {@code challengeSeq} 하나다. 명세는 "구독 아티스트 + 인기·관심 기반
-     * 추천 종합(rank:challenge 활용)" 이라고 적었지만 <b>랭킹이 아직 없다</b> —
-     * 최신순으로 내고 추천은 후속이다. 커서가 opaque 토큰이라 정렬 키가 바뀌어도
-     * 클라이언트 계약은 깨지지 않는다(§1.9).
+     * <p>커서가 opaque 토큰이라 정렬 키가 바뀌어도 클라이언트 계약은 깨지지 않는다(§1.9).
      */
-    List<Challenge> findByDeletedFalseOrderByChallengeSeqDesc(Pageable pageable);
+    List<Challenge> findByDeletedFalseOrderByParticipantCountDescChallengeSeqDesc(Pageable pageable);
 
-    /** 피드 다음 페이지 — 커서(마지막 항목의 seq)보다 작은 것부터. */
-    List<Challenge> findByDeletedFalseAndChallengeSeqLessThanOrderByChallengeSeqDesc(
-            Integer challengeSeq, Pageable pageable);
+    /**
+     * 피드 다음 페이지 — 커서 {@code (참여 수, seq)} 보다 뒤인 것부터.
+     *
+     * <p>seq 가 커서에 함께 들어가는 것이 요점이다. 참여 0건이 흔해 참여 수만으로는 동수
+     * 경계에서 페이지가 잘리지 않는다({@code Cursors.encodeScore} 와 같은 근거).
+     *
+     * <p>ponytail: 스크롤하는 사이 참여 수가 바뀌면 그 항목이 한 번 겹치거나 빠진다.
+     * 참여가 드물어 감수한다 — 문제가 되면 §6.1 처럼 스냅샷 버전 커서로 간다.
+     */
+    @Query("""
+            select c from Challenge c
+            where c.deleted = false
+              and (c.participantCount < :participantCount
+                   or (c.participantCount = :participantCount and c.challengeSeq < :challengeSeq))
+            order by c.participantCount desc, c.challengeSeq desc
+            """)
+    List<Challenge> findFeedAfter(@Param("participantCount") int participantCount,
+                                  @Param("challengeSeq") int challengeSeq, Pageable pageable);
 
     /**
      * 한 페이지 분 {@code isLiked} 를 한 번에 (API 명세 §7.1).

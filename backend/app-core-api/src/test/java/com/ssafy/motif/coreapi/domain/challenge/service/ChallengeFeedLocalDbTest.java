@@ -71,7 +71,7 @@ class ChallengeFeedLocalDbTest {
     private Integer otherFanSeq;
     private Integer artistSeq;
     private List<Integer> mine;      // 오래된 → 최신 순서로 만든 3건
-    private String anchor;           // 내 최신 seq 바로 위 — 여기서부터 읽으면 내 것이 먼저 온다
+    private String anchor;           // (참여 0, 내 최신 seq 바로 위) — 여기서부터 읽으면 내 것이 먼저 온다
 
     @BeforeEach
     void setUp() {
@@ -86,7 +86,7 @@ class ChallengeFeedLocalDbTest {
         for (int i = 0; i < 3; i++) {
             mine.add(newChallenge(songSeq));
         }
-        anchor = Cursors.encode(mine.getLast() + 1);
+        anchor = Cursors.encodeScore(0, mine.getLast() + 1);
     }
 
     @Test
@@ -107,7 +107,7 @@ class ChallengeFeedLocalDbTest {
     }
 
     @Test
-    @DisplayName("커서로 이어 읽으면 중복도 누락도 없다 — 최신순")
+    @DisplayName("커서로 이어 읽으면 중복도 누락도 없다 — 참여 수 동수면 최신순")
     void cursorPagesWithoutOverlapOrGap() {
         CursorResponse<ChallengeFeedItem> first = challengeQueryService.feed(fanSeq, anchor, 2);
         assertThat(seqs(first)).containsExactly(mine.get(2), mine.get(1));
@@ -117,6 +117,22 @@ class ChallengeFeedLocalDbTest {
         CursorResponse<ChallengeFeedItem> second =
                 challengeQueryService.feed(fanSeq, first.nextCursor(), 2);
         assertThat(seqs(second)).startsWith(mine.get(0));
+    }
+
+    @Test
+    @DisplayName("참여 수가 많은 챌린지가 최신 챌린지보다 앞선다")
+    void participantCountFirst() {
+        entityManager.createNativeQuery(
+                        "UPDATE motif_core.challenges SET participant_count = 5 WHERE challenge_seq = :seq")
+                .setParameter("seq", mine.getFirst())
+                .executeUpdate();
+        entityManager.clear();
+
+        // 내 것 중 가장 오래된 챌린지인데 참여 5건이라 맨 앞이다. 뒤는 다른 픽스처가 섞일 수 있어 보지 않는다
+        CursorResponse<ChallengeFeedItem> page = challengeQueryService.feed(
+                fanSeq, Cursors.encodeScore(5, mine.getLast() + 1), 1);
+
+        assertThat(seqs(page)).containsExactly(mine.getFirst());
     }
 
     @Test

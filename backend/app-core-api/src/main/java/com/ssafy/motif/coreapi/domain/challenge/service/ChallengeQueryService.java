@@ -66,12 +66,10 @@ public class ChallengeQueryService {
     private static final int MAX_SIZE = 100;
 
     /**
-     * §7.1 숏폼 피드 — 커서, 최신순.
+     * §7.1 숏폼 피드 — 커서, <b>참여 수 내림차순 · 동수면 최신순</b>.
      *
-     * <p><b>명세의 추천은 아직 없다.</b> §7.1 은 "구독 아티스트 + 인기·관심 기반 추천
-     * 종합(서버 내부 로직, {@code rank:challenge} 활용)" 이라고 적었는데 랭킹이 만들어지지
-     * 않았다. 지금은 최신순으로 낸다 — 커서가 opaque 토큰이라(§1.9) 정렬 키가 바뀌어도
-     * 클라이언트 계약은 깨지지 않는다. 랭킹 티켓이 이 메서드만 갈아끼우면 된다.
+     * <p>커서는 {@code (참여 수, challengeSeq)} 다({@link Cursors#encodeScore}). opaque
+     * 토큰이라(§1.9) 정렬 키가 바뀌어도 클라이언트 계약은 깨지지 않는다.
      *
      * <p>{@code size + 1} 건을 읽어 넘치면 잘라내고 그 사실을 {@code hasNext} 로 쓴다 —
      * 총 개수를 세지 않는 것이 커서 방식의 요점이다.
@@ -81,15 +79,14 @@ public class ChallengeQueryService {
      */
     public CursorResponse<ChallengeFeedItem> feed(Integer userSeq, String cursor, int size) {
         int limit = Math.clamp(size, 1, MAX_SIZE);
-        Integer after = Cursors.decode(cursor);
+        Cursors.Score after = Cursors.decodeScore(cursor);
 
         // 커서 유무로 메서드를 가른다 — null 을 쿼리 파라미터로 흘리지 않는다
         // (ChallengeRepository javadoc: 타입 없는 null → Postgres 추론 → 운영 500)
         PageRequest page = PageRequest.of(0, limit + 1);
         List<Challenge> rows = after == null
-                ? challengeRepository.findByDeletedFalseOrderByChallengeSeqDesc(page)
-                : challengeRepository.findByDeletedFalseAndChallengeSeqLessThanOrderByChallengeSeqDesc(
-                        after, page);
+                ? challengeRepository.findByDeletedFalseOrderByParticipantCountDescChallengeSeqDesc(page)
+                : challengeRepository.findFeedAfter((int) after.score(), (int) after.lastSeq(), page);
 
         boolean hasNext = rows.size() > limit;
         List<Challenge> challenges = hasNext ? rows.subList(0, limit) : rows;
@@ -115,7 +112,10 @@ public class ChallengeQueryService {
                         liked.contains(c.getChallengeSeq()), subscribed.contains(c.getArtistSeq())))
                 .toList();
 
-        String nextCursor = hasNext ? Cursors.encode(challengeSeqs.getLast()) : null;
+        Challenge last = challenges.getLast();
+        String nextCursor = hasNext
+                ? Cursors.encodeScore(last.getParticipantCount(), last.getChallengeSeq())
+                : null;
         return CursorResponse.forward(list, nextCursor);
     }
 
